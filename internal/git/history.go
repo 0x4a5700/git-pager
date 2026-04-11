@@ -121,3 +121,37 @@ func FileAt(repoDir, hash, relPath string) (string, error) {
 	}
 	return string(out), nil
 }
+
+// List returns the paths of all files tracked in the repo at
+// repoDir, each relative to the repo root. The list is the raw
+// output of `git ls-files`, which is already sorted and excludes
+// anything ignored or untracked.
+func List(repoDir string) ([]string, error) {
+	cmd := exec.Command("git", "-C", repoDir, "ls-files")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git ls-files: %w", err)
+	}
+	var files []string
+	for line := range strings.SplitSeq(strings.TrimRight(string(out), "\n"), "\n") {
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
+}
+
+// DiscoverRepo resolves dir (relative or absolute, possibly inside a
+// subdirectory of a repo) to the repo's toplevel. The returned path
+// has its symlinks resolved so filepath.Rel lines up with what git
+// reports internally.
+func DiscoverRepo(dir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
+	}
+	return revParseToplevel(abs)
+}

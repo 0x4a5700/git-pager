@@ -1,4 +1,4 @@
-package tui
+package pager
 
 import (
 	"fmt"
@@ -16,8 +16,8 @@ type Source interface {
 	Content(hash string) (string, error)
 }
 
-// The root Bubble Tea model. idx == 0 is the newest commit; it grows
-// as the user walks backwards in time.
+// Model pages through the history of a single file. idx == 0 is the
+// newest commit; it grows as the user walks backwards in time.
 type Model struct {
 	path    string
 	src     Source
@@ -33,7 +33,7 @@ func NewModel(path string, src Source) Model {
 }
 
 // load refreshes m.content for the current idx. It is a pointer
-// method so it can be called on the Update value receiver's local m.
+// method so Update can call it on its addressable value receiver.
 func (m *Model) load() {
 	commits := m.src.Commits()
 	if len(commits) == 0 {
@@ -55,7 +55,10 @@ func (m *Model) load() {
 
 func (m Model) Init() tea.Cmd { return nil }
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+// Update returns the concrete pager.Model rather than tea.Model. It
+// is a sub-model: the root tui.Model is what actually satisfies the
+// bubbletea program interface.
+func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
@@ -89,5 +92,5 @@ func (m Model) View() string {
 	}
 	status := fmt.Sprintf("%s  •  %s  •  [%d/%d %s]  %s",
 		m.path, c.ShortHash, m.idx+1, len(commits), position, c.Subject)
-	return m.content + "\n" + status + "\n"
+	return m.content + "\n" + status + "\n\n(esc: back to picker)\n"
 }

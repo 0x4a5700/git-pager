@@ -1,4 +1,4 @@
-package tui
+package pager
 
 import (
 	"fmt"
@@ -10,9 +10,6 @@ import (
 	"github.com/0x4a5700/git-pager/internal/git"
 )
 
-// fakeSource is a deterministic Source for unit-testing the Model
-// without spawning git. Setting err makes Content fail, which
-// exercises the error-display path.
 type fakeSource struct {
 	commits  []git.Commit
 	contents map[string]string
@@ -20,7 +17,6 @@ type fakeSource struct {
 }
 
 func (f *fakeSource) Commits() []git.Commit { return f.commits }
-
 func (f *fakeSource) Content(hash string) (string, error) {
 	if f.err != nil {
 		return "", f.err
@@ -48,17 +44,6 @@ func keyRune(r rune) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
 }
 
-// step drives Update once and asserts the result is still a Model.
-func step(t *testing.T, m Model, msg tea.Msg) (Model, tea.Cmd) {
-	t.Helper()
-	next, cmd := m.Update(msg)
-	got, ok := next.(Model)
-	if !ok {
-		t.Fatalf("Update returned %T, want Model", next)
-	}
-	return got, cmd
-}
-
 func TestNewModel_StartsAtNewest(t *testing.T) {
 	m := NewModel("a.txt", newFake())
 	if m.idx != 0 {
@@ -71,7 +56,7 @@ func TestNewModel_StartsAtNewest(t *testing.T) {
 
 func TestLeftArrow_StepsBack(t *testing.T) {
 	m := NewModel("a.txt", newFake())
-	m, _ = step(t, m, keyType(tea.KeyLeft))
+	m, _ = m.Update(keyType(tea.KeyLeft))
 	if m.idx != 1 {
 		t.Errorf("idx after left = %d, want 1", m.idx)
 	}
@@ -83,7 +68,7 @@ func TestLeftArrow_StepsBack(t *testing.T) {
 func TestLeftArrow_StopsAtOldest(t *testing.T) {
 	m := NewModel("a.txt", newFake())
 	for range 10 {
-		m, _ = step(t, m, keyType(tea.KeyLeft))
+		m, _ = m.Update(keyType(tea.KeyLeft))
 	}
 	if m.idx != 2 {
 		t.Errorf("idx = %d, want 2 (oldest)", m.idx)
@@ -95,12 +80,12 @@ func TestLeftArrow_StopsAtOldest(t *testing.T) {
 
 func TestRightArrow_StepsForward(t *testing.T) {
 	m := NewModel("a.txt", newFake())
-	m, _ = step(t, m, keyType(tea.KeyLeft))
-	m, _ = step(t, m, keyType(tea.KeyLeft))
+	m, _ = m.Update(keyType(tea.KeyLeft))
+	m, _ = m.Update(keyType(tea.KeyLeft))
 	if m.idx != 2 {
 		t.Fatalf("setup: idx = %d, want 2", m.idx)
 	}
-	m, _ = step(t, m, keyType(tea.KeyRight))
+	m, _ = m.Update(keyType(tea.KeyRight))
 	if m.idx != 1 {
 		t.Errorf("idx after right = %d, want 1", m.idx)
 	}
@@ -111,7 +96,7 @@ func TestRightArrow_StepsForward(t *testing.T) {
 
 func TestRightArrow_StopsAtNewest(t *testing.T) {
 	m := NewModel("a.txt", newFake())
-	m, _ = step(t, m, keyType(tea.KeyRight))
+	m, _ = m.Update(keyType(tea.KeyRight))
 	if m.idx != 0 {
 		t.Errorf("idx = %d, want 0", m.idx)
 	}
@@ -122,10 +107,10 @@ func TestRightArrow_StopsAtNewest(t *testing.T) {
 
 func TestRoundTrip_LeftThenRightReturns(t *testing.T) {
 	m := NewModel("a.txt", newFake())
-	m, _ = step(t, m, keyType(tea.KeyLeft))
-	m, _ = step(t, m, keyType(tea.KeyLeft))
-	m, _ = step(t, m, keyType(tea.KeyRight))
-	m, _ = step(t, m, keyType(tea.KeyRight))
+	m, _ = m.Update(keyType(tea.KeyLeft))
+	m, _ = m.Update(keyType(tea.KeyLeft))
+	m, _ = m.Update(keyType(tea.KeyRight))
+	m, _ = m.Update(keyType(tea.KeyRight))
 	if m.idx != 0 {
 		t.Errorf("idx after round trip = %d, want 0", m.idx)
 	}
@@ -168,7 +153,7 @@ func TestView_ContainsStatusFields(t *testing.T) {
 
 func TestView_PositionUpdatesAsWeWalkBack(t *testing.T) {
 	m := NewModel("a.txt", newFake())
-	m, _ = step(t, m, keyType(tea.KeyLeft))
+	m, _ = m.Update(keyType(tea.KeyLeft))
 	view := m.View()
 	for _, want := range []string{"body-middle", "ggggggg", "2/3", "1 back", "middle-msg"} {
 		if !strings.Contains(view, want) {
@@ -196,7 +181,7 @@ func TestView_ContentError(t *testing.T) {
 func TestUnknownKey_NoOp(t *testing.T) {
 	m := NewModel("a.txt", newFake())
 	before := m.idx
-	m, cmd := step(t, m, keyRune('x'))
+	m, cmd := m.Update(keyRune('x'))
 	if m.idx != before {
 		t.Errorf("idx changed on unknown key: %d -> %d", before, m.idx)
 	}

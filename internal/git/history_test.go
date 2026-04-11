@@ -162,3 +162,72 @@ func TestNewSource_NotARepo(t *testing.T) {
 		t.Fatal("expected error for non-repo path, got nil")
 	}
 }
+
+func TestList_ReturnsTrackedFilesSorted(t *testing.T) {
+	dir := initRepo(t)
+	commit(t, dir, "b.txt", "x", "add b")
+	commit(t, dir, "a.txt", "y", "add a")
+	commit(t, dir, "sub/c.txt", "z", "add sub/c")
+
+	files, err := List(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"a.txt", "b.txt", "sub/c.txt"}
+	if len(files) != len(want) {
+		t.Fatalf("files = %v, want %v", files, want)
+	}
+	for i, w := range want {
+		if files[i] != w {
+			t.Errorf("files[%d] = %q, want %q", i, files[i], w)
+		}
+	}
+}
+
+func TestList_ExcludesUntracked(t *testing.T) {
+	dir := initRepo(t)
+	commit(t, dir, "tracked.txt", "x", "add tracked")
+	if err := os.WriteFile(filepath.Join(dir, "untracked.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files, err := List(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if f == "untracked.txt" {
+			t.Errorf("untracked file leaked: %v", files)
+		}
+	}
+}
+
+func TestDiscoverRepo_FromRoot(t *testing.T) {
+	dir := initRepo(t)
+	commit(t, dir, "a.txt", "x", "add")
+	root, err := DiscoverRepo(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root != dir {
+		t.Errorf("root = %q, want %q", root, dir)
+	}
+}
+
+func TestDiscoverRepo_FromSubdir(t *testing.T) {
+	dir := initRepo(t)
+	commit(t, dir, "sub/a.txt", "x", "add")
+	root, err := DiscoverRepo(filepath.Join(dir, "sub"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root != dir {
+		t.Errorf("root = %q, want %q", root, dir)
+	}
+}
+
+func TestDiscoverRepo_NotARepo(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := DiscoverRepo(dir); err == nil {
+		t.Fatal("expected error for non-repo dir")
+	}
+}
