@@ -28,6 +28,11 @@ var (
 // (status bar + blank line + hint line).
 const reservedLines = 3
 
+// blamePrefixChars is the fixed width of the blame-mode gutter
+// prefix: 7 short-hash chars, a space, a 10-char "YYYY-MM-DD" date,
+// and a trailing space separator.
+const blamePrefixChars = 7 + 1 + 10 + 1
+
 // Source is the read-only view of a file's git history that Model
 // consumes. Keeping it as an interface lets tests drop in a fake
 // without spawning git subprocesses.
@@ -35,6 +40,7 @@ type Source interface {
 	Commits() []git.Commit
 	Content(hash string) (string, error)
 	Diff(hash string) (string, error)
+	Blame(hash string) ([]git.BlameLine, error)
 }
 
 // pane holds the scroll state and cached text for one of the two
@@ -70,6 +76,10 @@ const (
 	// commit highlighted in green. Scroll state is shared with file
 	// mode so flipping between them doesn't jump around.
 	modeInline
+	// modeBlame shows the file content at the current commit with a
+	// per-line prefix giving the short hash and date of the commit
+	// that last touched each line. Shares scroll with file mode.
+	modeBlame
 	numModes
 )
 
@@ -81,6 +91,8 @@ func (v viewMode) label() string {
 		return "diff"
 	case modeInline:
 		return "inline"
+	case modeBlame:
+		return "blame"
 	}
 	return "?"
 }
@@ -92,6 +104,14 @@ func (v viewMode) needsDiff() bool {
 	return v == modeDiff || v == modeInline
 }
 
+// blameData caches the blame result for the current commit. It is
+// parallel to m.file.lines — one entry per file line, in order.
+type blameData struct {
+	lines  []git.BlameLine
+	loaded bool
+	err    error
+}
+
 // Model pages through the history of a single file. idx == 0 is the
 // newest commit; it grows as the user walks backwards in time.
 type Model struct {
@@ -100,6 +120,7 @@ type Model struct {
 	idx    int
 	file   pane
 	diff   pane
+	blame  blameData
 	mode   viewMode
 	height int
 	width  int
@@ -135,6 +156,7 @@ func (m *Model) load() {
 		loaded:  true,
 	}
 	m.diff = pane{}
+	m.blame = blameData{}
 	m.err = nil
 	// If the current mode needs diff data (diff or inline), refetch
 	// it now — otherwise diff mode would render an empty pane and
@@ -142,6 +164,9 @@ func (m *Model) load() {
 	// be missing its highlight set.
 	if m.mode.needsDiff() {
 		m.loadDiff()
+	}
+	if m.mode == modeBlame {
+		m.loadBlame()
 	}
 }
 
@@ -172,6 +197,16 @@ func (m *Model) loadDiff() {
 		addedNums: added,
 		loaded:    true,
 	}
+}
+
+// loadBlame fetches and caches per-line blame for the current commit.
+func (m *Model) loadBlame() {
+	if m.blame.loaded {
+		return
+	}
+	commits := m.src.Commits()
+	lines, err := m.src.Blame(commits[m.idx].Hash)
+	m.blame = blameData{lines: lines, loaded: true, err: err}
 }
 
 // active returns the pane currently being displayed. Inline mode
@@ -247,6 +282,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.mode = (m.mode + 1) % numModes
 			if m.mode.needsDiff() {
 				m.loadDiff()
+			}
+			if m.mode == modeBlame {
+				m.loadBlame()
 			}
 		case "down", "j":
 			m.active().scrollY++
@@ -347,6 +385,26 @@ func formatDiffGutterCell(n, width int) string {
 	return fmt.Sprintf("%*d", width, n)
 }
 
+// formatBlamePrefix returns the fixed-width blame prefix for the
+// line at idx. Lines beyond the blame slice (e.g. the trailing empty
+// entry left behind by strings.Split on a file ending in '\n') or
+// entries missing a hash fall back to a blank pad so the gutter
+// stays aligned.
+func formatBlamePrefix(lines []git.BlameLine, idx int) string {
+	if idx >= len(lines) {
+		return strings.Repeat(" ", blamePrefixChars)
+	}
+	bl := lines[idx]
+	if bl.ShortHash == "" {
+		return strings.Repeat(" ", blamePrefixChars)
+	}
+	date := "----------"
+	if !bl.Time.IsZero() {
+		date = bl.Time.Format("2006-01-02")
+	}
+	return bl.ShortHash + " " + date + " "
+}
+
 // styleDiffLine colorizes one line of unified diff output.
 func styleDiffLine(line string) string {
 	switch {
@@ -385,6 +443,9 @@ func (m Model) View() string {
 	if p.err != nil {
 		return fmt.Sprintf("error: %v\n", p.err)
 	}
+	if m.mode == modeBlame && m.blame.err != nil {
+		return fmt.Sprintf("error: %v\n", m.blame.err)
+	}
 
 	end := p.scrollY + ch
 	if end > len(p.lines) {
@@ -414,6 +475,8 @@ func (m Model) View() string {
 	//   file/inline mode: one column of 1-based line numbers
 	//   diff mode:        two columns (old | new file line numbers),
 	//                     blank on the side that does not apply
+	//   blame mode:       "<shorthash> <YYYY-MM-DD> " prefix, followed
+	//                     by the same single-column line number gutter
 	// Each column is sized to its widest number; a single space
 	// separates columns and trails the gutter.
 	var (
@@ -439,6 +502,9 @@ func (m Model) View() string {
 	} else {
 		fileDigits = len(strconv.Itoa(totalLines))
 		gutterWidth = fileDigits + 1
+		if m.mode == modeBlame {
+			gutterWidth += blamePrefixChars
+		}
 	}
 	contentWidth := padWidth - gutterWidth
 	if contentWidth < 1 {
@@ -451,7 +517,7 @@ func (m Model) View() string {
 
 	status := fmt.Sprintf("%s  •  %s  •  [%d/%d %s]  %s  %s  %s",
 		m.path, c.ShortHash, m.idx+1, len(commits), position, c.Subject, m.mode.label(), scrollInfo)
-	hint := "(esc: back, ←/→: older/newer, d: file/diff/inline, j/k: scroll, g/G: top/bottom)"
+	hint := "(esc: back, ←/→: older/newer, d: file/diff/inline/blame, j/k: scroll, g/G: top/bottom)"
 
 	paddedLines := make([]string, len(visibleLines))
 	for i, l := range visibleLines {
@@ -471,6 +537,11 @@ func (m Model) View() string {
 		}
 		lineNum := idx + 1
 		gutter := lineNumStyle.Render(fmt.Sprintf("%*d ", fileDigits, lineNum))
+		if m.mode == modeBlame {
+			prefix := lineNumStyle.Render(formatBlamePrefix(m.blame.lines, idx))
+			paddedLines[i] = prefix + gutter + contentStyle.Render(l)
+			continue
+		}
 		if m.mode == modeInline && m.diff.addedNums[lineNum] {
 			paddedLines[i] = gutter + inlineAddStyle.Render(l)
 			continue

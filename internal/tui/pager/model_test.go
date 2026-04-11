@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -14,8 +15,10 @@ type fakeSource struct {
 	commits  []git.Commit
 	contents map[string]string
 	diffs    map[string]string
+	blames   map[string][]git.BlameLine
 	err      error
 	diffErr  error
+	blameErr error
 }
 
 func (f *fakeSource) Commits() []git.Commit { return f.commits }
@@ -30,6 +33,12 @@ func (f *fakeSource) Diff(hash string) (string, error) {
 		return "", f.diffErr
 	}
 	return f.diffs[hash], nil
+}
+func (f *fakeSource) Blame(hash string) ([]git.BlameLine, error) {
+	if f.blameErr != nil {
+		return nil, f.blameErr
+	}
+	return f.blames[hash], nil
 }
 
 func newFake() *fakeSource {
@@ -326,17 +335,12 @@ func TestDKeyCyclesModes(t *testing.T) {
 	if m.mode != modeFile {
 		t.Fatalf("initial mode = %v, want modeFile", m.mode)
 	}
-	m, _ = m.Update(keyRune('d'))
-	if m.mode != modeDiff {
-		t.Errorf("after 1x d, mode = %v, want modeDiff", m.mode)
-	}
-	m, _ = m.Update(keyRune('d'))
-	if m.mode != modeInline {
-		t.Errorf("after 2x d, mode = %v, want modeInline", m.mode)
-	}
-	m, _ = m.Update(keyRune('d'))
-	if m.mode != modeFile {
-		t.Errorf("after 3x d, mode = %v, want modeFile", m.mode)
+	wantSeq := []viewMode{modeDiff, modeInline, modeBlame, modeFile}
+	for i, want := range wantSeq {
+		m, _ = m.Update(keyRune('d'))
+		if m.mode != want {
+			t.Errorf("after %d d presses, mode = %v, want %v", i+1, m.mode, want)
+		}
 	}
 }
 
@@ -400,6 +404,101 @@ func TestInlineMode_PagingRefreshesAddedSet(t *testing.T) {
 	m, _ = m.Update(keyType(tea.KeyLeft))
 	if !m.diff.addedNums[2] {
 		t.Errorf("after paging in inline mode, addedNums[2] should be set: %v", m.diff.addedNums)
+	}
+}
+
+func TestBlameMode_RendersHashAndDatePrefix(t *testing.T) {
+	fake := newFake()
+	fake.contents["hhhhhhhhhh"] = "alpha\nbeta\n"
+	ts := time.Date(2024, 6, 15, 12, 0, 0, 0, time.UTC)
+	fake.blames = map[string][]git.BlameLine{
+		"hhhhhhhhhh": {
+			{Hash: "abc1234aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ShortHash: "abc1234", Author: "tess", Time: ts, Content: "alpha"},
+			{Hash: "def5678bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", ShortHash: "def5678", Author: "tess", Time: ts, Content: "beta"},
+		},
+	}
+	m := withSize(NewModel("a.txt", fake))
+	// Cycle file → diff → inline → blame.
+	for range 3 {
+		m, _ = m.Update(keyRune('d'))
+	}
+	if m.mode != modeBlame {
+		t.Fatalf("mode = %v, want modeBlame", m.mode)
+	}
+	if !m.blame.loaded {
+		t.Fatalf("blame should be loaded after entering blame mode")
+	}
+	stripped := stripAnsi(m.View())
+	for _, want := range []string{
+		"abc1234 2024-06-15",
+		"def5678 2024-06-15",
+		"alpha",
+		"beta",
+		"blame",
+	} {
+		if !strings.Contains(stripped, want) {
+			t.Errorf("view missing %q:\n%s", want, stripped)
+		}
+	}
+}
+
+func TestBlameMode_PagingRefreshesBlame(t *testing.T) {
+	fake := newFake()
+	fake.contents["hhhhhhhhhh"] = "one\n"
+	fake.contents["gggggggggg"] = "two\n"
+	ts := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	fake.blames = map[string][]git.BlameLine{
+		"hhhhhhhhhh": {{ShortHash: "hhhhhhh", Time: ts, Content: "one"}},
+		"gggggggggg": {{ShortHash: "ggggggg", Time: ts, Content: "two"}},
+	}
+	m := withSize(NewModel("a.txt", fake))
+	for range 3 {
+		m, _ = m.Update(keyRune('d'))
+	}
+	// Newest commit loaded — now page left to middle commit.
+	m, _ = m.Update(keyType(tea.KeyLeft))
+	if !m.blame.loaded {
+		t.Fatalf("blame should be reloaded after paging in blame mode")
+	}
+	if len(m.blame.lines) == 0 || m.blame.lines[0].ShortHash != "ggggggg" {
+		t.Errorf("blame not refreshed for new commit: %+v", m.blame.lines)
+	}
+}
+
+func TestBlameMode_ErrorShown(t *testing.T) {
+	fake := newFake()
+	fake.blameErr = fmt.Errorf("blame boom")
+	m := withSize(NewModel("a.txt", fake))
+	for range 3 {
+		m, _ = m.Update(keyRune('d'))
+	}
+	if !strings.Contains(m.View(), "blame boom") {
+		t.Errorf("expected 'blame boom' in view:\n%s", m.View())
+	}
+}
+
+func TestFormatBlamePrefix(t *testing.T) {
+	ts := time.Date(2023, 12, 31, 23, 59, 0, 0, time.UTC)
+	lines := []git.BlameLine{
+		{ShortHash: "abcdef1", Time: ts},
+		{ShortHash: "", Time: ts}, // missing hash — should pad
+	}
+	got := formatBlamePrefix(lines, 0)
+	if got != "abcdef1 2023-12-31 " {
+		t.Errorf("got %q", got)
+	}
+	if len(got) != blamePrefixChars {
+		t.Errorf("width = %d, want %d", len(got), blamePrefixChars)
+	}
+	// Empty hash → blank pad of the correct width.
+	blank := formatBlamePrefix(lines, 1)
+	if blank != strings.Repeat(" ", blamePrefixChars) {
+		t.Errorf("blank = %q", blank)
+	}
+	// Out-of-range index → blank pad of the correct width.
+	oob := formatBlamePrefix(lines, 5)
+	if oob != strings.Repeat(" ", blamePrefixChars) {
+		t.Errorf("oob = %q", oob)
 	}
 }
 
