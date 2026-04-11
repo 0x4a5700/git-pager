@@ -2,6 +2,7 @@ package pager
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -14,6 +15,8 @@ var statusBarStyle = lipgloss.NewStyle().
 	Background(lipgloss.Color("15")).
 	Foreground(lipgloss.Color("0")).
 	Bold(true)
+
+var lineNumStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 
 // reservedLines is the number of fixed lines above the content area
 // (status bar + blank line + hint line).
@@ -189,13 +192,25 @@ func (m Model) View() string {
 	}
 	lineStyle := lipgloss.NewStyle().Width(padWidth).MaxWidth(padWidth)
 
+	// Gutter width is the digit count of the largest line number, plus
+	// a single space separator.
+	gutterDigits := len(strconv.Itoa(totalLines))
+	gutterWidth := gutterDigits + 1
+	contentWidth := padWidth - gutterWidth
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+	contentStyle := lipgloss.NewStyle().Width(contentWidth).MaxWidth(contentWidth)
+
 	status := fmt.Sprintf("%s  •  %s  •  [%d/%d %s]  %s  %s",
 		m.path, c.ShortHash, m.idx+1, len(commits), position, c.Subject, scrollInfo)
 	hint := "(esc: back to picker, ←/→: older/newer, j/k: scroll, g/G: top/bottom)"
 
 	paddedLines := make([]string, len(visibleLines))
 	for i, l := range visibleLines {
-		paddedLines[i] = lineStyle.Render(l)
+		lineNum := m.scrollY + i + 1
+		gutter := lineNumStyle.Render(fmt.Sprintf("%*d ", gutterDigits, lineNum))
+		paddedLines[i] = gutter + contentStyle.Render(l)
 	}
 
 	return statusBarStyle.Width(padWidth).MaxWidth(padWidth).Render(status) + "\n" +
