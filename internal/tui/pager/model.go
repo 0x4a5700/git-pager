@@ -16,7 +16,13 @@ var statusBarStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("0")).
 	Bold(true)
 
-var lineNumStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+var (
+	lineNumStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	diffAddStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("34"))  // green
+	diffDelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("160")) // red
+	diffHunkStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("44"))  // cyan
+	diffMetaStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244")) // dim
+)
 
 // reservedLines is the number of fixed lines above the content area
 // (status bar + blank line + hint line).
@@ -28,20 +34,38 @@ const reservedLines = 3
 type Source interface {
 	Commits() []git.Commit
 	Content(hash string) (string, error)
+	Diff(hash string) (string, error)
+}
+
+// pane holds the scroll state and cached text for one of the two
+// views (file content or diff) the pager can display.
+//
+// For the diff pane, oldNums/newNums are parallel to lines and hold
+// the old- and new-file line numbers for each diff row (0 means no
+// number applies — e.g. file/hunk headers, '+' has no old #, '-' has
+// no new #). They are nil for the file pane.
+type pane struct {
+	content string
+	lines   []string
+	oldNums []int
+	newNums []int
+	scrollY int
+	loaded  bool
+	err     error
 }
 
 // Model pages through the history of a single file. idx == 0 is the
 // newest commit; it grows as the user walks backwards in time.
 type Model struct {
-	path    string
-	src     Source
-	idx     int
-	content string
-	lines   []string
-	scrollY int
-	height  int
-	width   int
-	err     error
+	path     string
+	src      Source
+	idx      int
+	file     pane
+	diff     pane
+	showDiff bool
+	height   int
+	width    int
+	err      error
 }
 
 func NewModel(path string, src Source) Model {
@@ -50,7 +74,8 @@ func NewModel(path string, src Source) Model {
 	return m
 }
 
-// load refreshes m.content for the current idx and resets scroll.
+// load fetches the file content at m.idx and resets both panes. The
+// diff pane is lazy-loaded on first toggle into diff mode.
 func (m *Model) load() {
 	commits := m.src.Commits()
 	if len(commits) == 0 {
@@ -66,14 +91,53 @@ func (m *Model) load() {
 		m.err = err
 		return
 	}
-	m.content = content
-	m.lines = strings.Split(content, "\n")
-	m.scrollY = 0
+	m.file = pane{
+		content: content,
+		lines:   strings.Split(content, "\n"),
+		loaded:  true,
+	}
+	m.diff = pane{}
 	m.err = nil
+	// If we're currently viewing diff mode, refetch the diff for the
+	// new commit now — otherwise View() would render an empty pane
+	// and divide by zero on the scroll percentage.
+	if m.showDiff {
+		m.loadDiff()
+	}
 }
 
-// contentHeight returns the number of lines available for file content.
-// Returns 0 (show all) when the terminal height is not yet known.
+// loadDiff fetches and caches the diff for the current commit.
+func (m *Model) loadDiff() {
+	if m.diff.loaded {
+		return
+	}
+	commits := m.src.Commits()
+	diff, err := m.src.Diff(commits[m.idx].Hash)
+	if err != nil {
+		m.diff = pane{loaded: true, err: err}
+		return
+	}
+	lines := strings.Split(diff, "\n")
+	oldNums, newNums := diffLineNumbers(lines)
+	m.diff = pane{
+		content: diff,
+		lines:   lines,
+		oldNums: oldNums,
+		newNums: newNums,
+		loaded:  true,
+	}
+}
+
+// active returns the pane currently being displayed.
+func (m *Model) active() *pane {
+	if m.showDiff {
+		return &m.diff
+	}
+	return &m.file
+}
+
+// contentHeight returns the number of lines available for content.
+// Returns 0 when the terminal height is not yet known.
 func (m Model) contentHeight() int {
 	if m.height <= reservedLines {
 		return 0
@@ -81,22 +145,23 @@ func (m Model) contentHeight() int {
 	return m.height - reservedLines
 }
 
-// clampScroll keeps scrollY within valid bounds for the current content.
+// clampScroll keeps the active pane's scrollY within valid bounds.
 func (m *Model) clampScroll() {
+	p := m.active()
 	ch := m.contentHeight()
 	if ch == 0 {
-		m.scrollY = 0
+		p.scrollY = 0
 		return
 	}
-	maxScroll := len(m.lines) - ch
+	maxScroll := len(p.lines) - ch
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
-	if m.scrollY > maxScroll {
-		m.scrollY = maxScroll
+	if p.scrollY > maxScroll {
+		p.scrollY = maxScroll
 	}
-	if m.scrollY < 0 {
-		m.scrollY = 0
+	if p.scrollY < 0 {
+		p.scrollY = 0
 	}
 }
 
@@ -131,26 +196,126 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				m.idx--
 				m.load()
 			}
+		case "d":
+			m.showDiff = !m.showDiff
+			if m.showDiff {
+				m.loadDiff()
+			}
 		case "down", "j":
-			m.scrollY++
+			m.active().scrollY++
 			m.clampScroll()
 		case "up", "k":
-			m.scrollY--
+			m.active().scrollY--
 			m.clampScroll()
 		case "pgdown", " ":
-			m.scrollY += ch
+			m.active().scrollY += ch
 			m.clampScroll()
 		case "pgup", "b":
-			m.scrollY -= ch
+			m.active().scrollY -= ch
 			m.clampScroll()
 		case "g", "home":
-			m.scrollY = 0
+			m.active().scrollY = 0
 		case "G", "end":
-			m.scrollY = len(m.lines) - ch
+			m.active().scrollY = len(m.active().lines) - ch
 			m.clampScroll()
 		}
 	}
 	return m, nil
+}
+
+// diffLineNumbers walks a unified diff and returns, for each input
+// line, the corresponding old- and new-file line numbers. A zero
+// entry means that side has no number at that row (headers, '+' on
+// the old side, '-' on the new side). Hunk header starts reset the
+// counters to the values declared in the "@@ -a,b +c,d @@" marker.
+func diffLineNumbers(lines []string) (oldNums, newNums []int) {
+	oldNums = make([]int, len(lines))
+	newNums = make([]int, len(lines))
+	var oldN, newN int
+	inHunk := false
+	for i, line := range lines {
+		if strings.HasPrefix(line, "@@") {
+			if o, n, ok := parseHunkHeader(line); ok {
+				oldN = o
+				newN = n
+				inHunk = true
+			}
+			continue
+		}
+		if !inHunk {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "+++"), strings.HasPrefix(line, "---"):
+			// File markers appear before the first hunk so inHunk is
+			// normally false here; guard defensively.
+		case strings.HasPrefix(line, "+"):
+			newNums[i] = newN
+			newN++
+		case strings.HasPrefix(line, "-"):
+			oldNums[i] = oldN
+			oldN++
+		case strings.HasPrefix(line, " "):
+			oldNums[i] = oldN
+			newNums[i] = newN
+			oldN++
+			newN++
+		}
+	}
+	return oldNums, newNums
+}
+
+// parseHunkHeader extracts the old and new starting line numbers
+// from a unified diff hunk header like "@@ -10,7 +10,8 @@ func bar()".
+// Accepts both "-a,b" and single-number "-a" forms.
+func parseHunkHeader(line string) (oldStart, newStart int, ok bool) {
+	rest := strings.TrimPrefix(line, "@@")
+	end := strings.Index(rest, "@@")
+	if end < 0 {
+		return 0, 0, false
+	}
+	parts := strings.Fields(rest[:end])
+	if len(parts) < 2 {
+		return 0, 0, false
+	}
+	if !strings.HasPrefix(parts[0], "-") || !strings.HasPrefix(parts[1], "+") {
+		return 0, 0, false
+	}
+	oldField := strings.SplitN(parts[0][1:], ",", 2)[0]
+	newField := strings.SplitN(parts[1][1:], ",", 2)[0]
+	o, err1 := strconv.Atoi(oldField)
+	n, err2 := strconv.Atoi(newField)
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
+	}
+	return o, n, true
+}
+
+// formatDiffGutterCell renders one side of a diff gutter: a
+// right-aligned number of the given width, or a blank pad when n == 0.
+func formatDiffGutterCell(n, width int) string {
+	if n == 0 {
+		return strings.Repeat(" ", width)
+	}
+	return fmt.Sprintf("%*d", width, n)
+}
+
+// styleDiffLine colorizes one line of unified diff output.
+func styleDiffLine(line string) string {
+	switch {
+	case strings.HasPrefix(line, "+++"), strings.HasPrefix(line, "---"),
+		strings.HasPrefix(line, "diff "), strings.HasPrefix(line, "index "),
+		strings.HasPrefix(line, "new file"), strings.HasPrefix(line, "deleted file"),
+		strings.HasPrefix(line, "similarity "), strings.HasPrefix(line, "rename "):
+		return diffMetaStyle.Render(line)
+	case strings.HasPrefix(line, "@@"):
+		return diffHunkStyle.Render(line)
+	case strings.HasPrefix(line, "+"):
+		return diffAddStyle.Render(line)
+	case strings.HasPrefix(line, "-"):
+		return diffDelStyle.Render(line)
+	}
+	return line
 }
 
 func (m Model) View() string {
@@ -168,18 +333,24 @@ func (m Model) View() string {
 	if ch == 0 {
 		return "" // wait for WindowSizeMsg before rendering content
 	}
-	end := m.scrollY + ch
-	if end > len(m.lines) {
-		end = len(m.lines)
-	}
-	visibleLines := m.lines[m.scrollY:end]
 
-	totalLines := len(m.lines)
-	scrollInfo := fmt.Sprintf("%d%%", 100*(m.scrollY+ch)/totalLines)
-	if m.scrollY+ch >= totalLines {
+	p := m.active()
+	if p.err != nil {
+		return fmt.Sprintf("error: %v\n", p.err)
+	}
+
+	end := p.scrollY + ch
+	if end > len(p.lines) {
+		end = len(p.lines)
+	}
+	visibleLines := p.lines[p.scrollY:end]
+
+	totalLines := len(p.lines)
+	scrollInfo := fmt.Sprintf("%d%%", 100*(p.scrollY+ch)/totalLines)
+	if p.scrollY+ch >= totalLines {
 		scrollInfo = "100%"
 	}
-	if m.scrollY == 0 && ch >= totalLines {
+	if p.scrollY == 0 && ch >= totalLines {
 		scrollInfo = "All"
 	}
 
@@ -192,24 +363,68 @@ func (m Model) View() string {
 	}
 	lineStyle := lipgloss.NewStyle().Width(padWidth).MaxWidth(padWidth)
 
-	// Gutter width is the digit count of the largest line number, plus
-	// a single space separator.
-	gutterDigits := len(strconv.Itoa(totalLines))
-	gutterWidth := gutterDigits + 1
+	// Gutter layout depends on mode.
+	//   file mode: one column of 1-based line numbers
+	//   diff mode: two columns (old | new file line numbers), blank
+	//              on the side that does not apply to a given row
+	// Each column is sized to its widest number; a single space
+	// separates columns and trails the gutter.
+	var (
+		fileDigits, oldDigits, newDigits, gutterWidth int
+	)
+	if m.showDiff {
+		maxOld, maxNew := 0, 0
+		for _, n := range p.oldNums {
+			if n > maxOld {
+				maxOld = n
+			}
+		}
+		for _, n := range p.newNums {
+			if n > maxNew {
+				maxNew = n
+			}
+		}
+		if maxOld > 0 || maxNew > 0 {
+			oldDigits = len(strconv.Itoa(maxOld))
+			newDigits = len(strconv.Itoa(maxNew))
+			gutterWidth = oldDigits + newDigits + 2
+		}
+	} else {
+		fileDigits = len(strconv.Itoa(totalLines))
+		gutterWidth = fileDigits + 1
+	}
 	contentWidth := padWidth - gutterWidth
 	if contentWidth < 1 {
 		contentWidth = 1
 	}
 	contentStyle := lipgloss.NewStyle().Width(contentWidth).MaxWidth(contentWidth)
 
-	status := fmt.Sprintf("%s  •  %s  •  [%d/%d %s]  %s  %s",
-		m.path, c.ShortHash, m.idx+1, len(commits), position, c.Subject, scrollInfo)
-	hint := "(esc: back to picker, ←/→: older/newer, j/k: scroll, g/G: top/bottom)"
+	mode := "file"
+	if m.showDiff {
+		mode = "diff"
+	}
+	status := fmt.Sprintf("%s  •  %s  •  [%d/%d %s]  %s  %s  %s",
+		m.path, c.ShortHash, m.idx+1, len(commits), position, c.Subject, mode, scrollInfo)
+	hint := "(esc: back, ←/→: older/newer, d: diff/file, j/k: scroll, g/G: top/bottom)"
 
 	paddedLines := make([]string, len(visibleLines))
 	for i, l := range visibleLines {
-		lineNum := m.scrollY + i + 1
-		gutter := lineNumStyle.Render(fmt.Sprintf("%*d ", gutterDigits, lineNum))
+		idx := p.scrollY + i
+		if m.showDiff {
+			var gutter string
+			if gutterWidth > 0 {
+				gutter = lineNumStyle.Render(
+					formatDiffGutterCell(p.oldNums[idx], oldDigits) + " " +
+						formatDiffGutterCell(p.newNums[idx], newDigits) + " ",
+				)
+			}
+			// Truncate/pad first, then colorize so ANSI codes don't
+			// confuse width measurement.
+			paddedLines[i] = gutter + styleDiffLine(contentStyle.Render(l))
+			continue
+		}
+		lineNum := idx + 1
+		gutter := lineNumStyle.Render(fmt.Sprintf("%*d ", fileDigits, lineNum))
 		paddedLines[i] = gutter + contentStyle.Render(l)
 	}
 

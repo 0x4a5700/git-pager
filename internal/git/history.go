@@ -66,6 +66,13 @@ func (s *Source) Content(hash string) (string, error) {
 	return FileAt(s.repoDir, hash, s.relPath)
 }
 
+// Diff returns the unified diff of the file introduced by the given
+// commit (i.e. parent-vs-commit for this path). Root commits show the
+// file as fully added.
+func (s *Source) Diff(hash string) (string, error) {
+	return DiffAt(s.repoDir, hash, s.relPath)
+}
+
 func revParseToplevel(dir string) (string, error) {
 	cmd := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel")
 	out, err := cmd.Output()
@@ -120,6 +127,20 @@ func FileAt(repoDir, hash, relPath string) (string, error) {
 		return "", fmt.Errorf("git show %s:%s: %w", hash, relPath, err)
 	}
 	return string(out), nil
+}
+
+// DiffAt returns the unified diff for relPath introduced by the given
+// commit. An empty format string suppresses the commit header so the
+// output is just the diff body.
+func DiffAt(repoDir, hash, relPath string) (string, error) {
+	cmd := exec.Command("git", "-C", repoDir, "show",
+		"--format=", "--no-color", hash, "--", relPath)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git show --format= %s -- %s: %w", hash, relPath, err)
+	}
+	// `--format=` still emits a leading newline before the diff body.
+	return strings.TrimLeft(string(out), "\n"), nil
 }
 
 // List returns the paths of all files tracked in the repo at

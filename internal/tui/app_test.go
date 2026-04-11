@@ -16,10 +16,12 @@ import (
 type fakeSource struct {
 	commits  []git.Commit
 	contents map[string]string
+	diffs    map[string]string
 }
 
 func (f *fakeSource) Commits() []git.Commit            { return f.commits }
 func (f *fakeSource) Content(h string) (string, error) { return f.contents[h], nil }
+func (f *fakeSource) Diff(h string) (string, error)    { return f.diffs[h], nil }
 
 var stockFiles = []string{"a.txt", "sub/b.txt"}
 
