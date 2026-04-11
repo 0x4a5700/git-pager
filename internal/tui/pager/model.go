@@ -4,9 +4,15 @@ import (
 	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/0x4a5700/git-pager/internal/git"
 )
+
+var statusBarStyle = lipgloss.NewStyle().
+	Background(lipgloss.Color("15")).
+	Foreground(lipgloss.Color("0")).
+	Bold(true)
 
 // Source is the read-only view of a file's git history that Model
 // consumes. Keeping it as an interface lets tests drop in a fake
@@ -92,5 +98,5 @@ func (m Model) View() string {
 	}
 	status := fmt.Sprintf("%s  •  %s  •  [%d/%d %s]  %s",
 		m.path, c.ShortHash, m.idx+1, len(commits), position, c.Subject)
-	return m.content + "\n" + status + "\n\n(esc: back to picker)\n"
+	return statusBarStyle.Render(status) + "\n(esc: back to picker, ←/→: older/newer)\n\n" + m.content + "\n"
 }
