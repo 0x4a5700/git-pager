@@ -80,7 +80,6 @@ const (
 	// per-line prefix giving the short hash and date of the commit
 	// that last touched each line. Shares scroll with file mode.
 	modeBlame
-	numModes
 )
 
 func (v viewMode) label() string {
@@ -199,6 +198,19 @@ func (m *Model) loadDiff() {
 	}
 }
 
+// setMode switches to the given view mode and lazy-loads any data
+// that mode needs (the diff for diff/inline, the blame for blame).
+// Loading is cached, so this is cheap on subsequent toggles.
+func (m *Model) setMode(mode viewMode) {
+	m.mode = mode
+	if mode.needsDiff() {
+		m.loadDiff()
+	}
+	if mode == modeBlame {
+		m.loadBlame()
+	}
+}
+
 // loadBlame fetches and caches per-line blame for the current commit.
 func (m *Model) loadBlame() {
 	if m.blame.loaded {
@@ -278,14 +290,14 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				m.idx--
 				m.load()
 			}
+		case "f":
+			m.setMode(modeFile)
 		case "d":
-			m.mode = (m.mode + 1) % numModes
-			if m.mode.needsDiff() {
-				m.loadDiff()
-			}
-			if m.mode == modeBlame {
-				m.loadBlame()
-			}
+			m.setMode(modeDiff)
+		case "i":
+			m.setMode(modeInline)
+		case "b":
+			m.setMode(modeBlame)
 		case "down", "j":
 			m.active().scrollY++
 			m.clampScroll()
@@ -295,7 +307,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		case "pgdown", " ":
 			m.active().scrollY += ch
 			m.clampScroll()
-		case "pgup", "b":
+		case "pgup":
 			m.active().scrollY -= ch
 			m.clampScroll()
 		case "g", "home":
@@ -517,7 +529,7 @@ func (m Model) View() string {
 
 	status := fmt.Sprintf("%s  •  %s  •  [%d/%d %s]  %s  %s  %s",
 		m.path, c.ShortHash, m.idx+1, len(commits), position, c.Subject, m.mode.label(), scrollInfo)
-	hint := "(esc: back, ←/→: older/newer, d: file/diff/inline/blame, j/k: scroll, g/G: top/bottom)"
+	hint := "(esc: back, ←/→: older/newer, f/d/i/b: file/diff/inline/blame, j/k: scroll, g/G: top/bottom)"
 
 	paddedLines := make([]string, len(visibleLines))
 	for i, l := range visibleLines {

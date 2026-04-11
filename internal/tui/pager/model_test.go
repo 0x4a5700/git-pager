@@ -330,16 +330,28 @@ func TestDiffMode_RendersTwoSidedLineNumbers(t *testing.T) {
 	}
 }
 
-func TestDKeyCyclesModes(t *testing.T) {
+func TestModeHotkeys(t *testing.T) {
+	// Each key should jump directly to its mode regardless of the
+	// previous state.
+	cases := []struct {
+		key  rune
+		want viewMode
+	}{
+		{'d', modeDiff},
+		{'i', modeInline},
+		{'b', modeBlame},
+		{'f', modeFile},
+		{'b', modeBlame}, // bounce back to ensure no hidden state
+		{'d', modeDiff},
+	}
 	m := NewModel("a.txt", newFake())
 	if m.mode != modeFile {
 		t.Fatalf("initial mode = %v, want modeFile", m.mode)
 	}
-	wantSeq := []viewMode{modeDiff, modeInline, modeBlame, modeFile}
-	for i, want := range wantSeq {
-		m, _ = m.Update(keyRune('d'))
-		if m.mode != want {
-			t.Errorf("after %d d presses, mode = %v, want %v", i+1, m.mode, want)
+	for _, c := range cases {
+		m, _ = m.Update(keyRune(c.key))
+		if m.mode != c.want {
+			t.Errorf("%c: mode = %v, want %v", c.key, m.mode, c.want)
 		}
 	}
 }
@@ -358,9 +370,7 @@ func TestInlineMode_HighlightsAddedLinesOnly(t *testing.T) {
 		"+line two\n" +
 		" line three\n"
 	m := withSize(NewModel("a.txt", fake))
-	// file → diff → inline
-	m, _ = m.Update(keyRune('d'))
-	m, _ = m.Update(keyRune('d'))
+	m, _ = m.Update(keyRune('i'))
 	if m.mode != modeInline {
 		t.Fatalf("mode = %v, want modeInline", m.mode)
 	}
@@ -398,8 +408,7 @@ func TestInlineMode_PagingRefreshesAddedSet(t *testing.T) {
 	fake.diffs["hhhhhhhhhh"] = "@@ -1,3 +1,3 @@\n a\n-B\n+b\n c\n"
 	fake.diffs["gggggggggg"] = "@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n"
 	m := withSize(NewModel("a.txt", fake))
-	m, _ = m.Update(keyRune('d')) // diff
-	m, _ = m.Update(keyRune('d')) // inline
+	m, _ = m.Update(keyRune('i'))
 	// Newest commit added line 2 ('b'). Page left to older commit.
 	m, _ = m.Update(keyType(tea.KeyLeft))
 	if !m.diff.addedNums[2] {
@@ -418,10 +427,7 @@ func TestBlameMode_RendersHashAndDatePrefix(t *testing.T) {
 		},
 	}
 	m := withSize(NewModel("a.txt", fake))
-	// Cycle file → diff → inline → blame.
-	for range 3 {
-		m, _ = m.Update(keyRune('d'))
-	}
+	m, _ = m.Update(keyRune('b'))
 	if m.mode != modeBlame {
 		t.Fatalf("mode = %v, want modeBlame", m.mode)
 	}
@@ -452,9 +458,7 @@ func TestBlameMode_PagingRefreshesBlame(t *testing.T) {
 		"gggggggggg": {{ShortHash: "ggggggg", Time: ts, Content: "two"}},
 	}
 	m := withSize(NewModel("a.txt", fake))
-	for range 3 {
-		m, _ = m.Update(keyRune('d'))
-	}
+	m, _ = m.Update(keyRune('b'))
 	// Newest commit loaded — now page left to middle commit.
 	m, _ = m.Update(keyType(tea.KeyLeft))
 	if !m.blame.loaded {
@@ -469,9 +473,7 @@ func TestBlameMode_ErrorShown(t *testing.T) {
 	fake := newFake()
 	fake.blameErr = fmt.Errorf("blame boom")
 	m := withSize(NewModel("a.txt", fake))
-	for range 3 {
-		m, _ = m.Update(keyRune('d'))
-	}
+	m, _ = m.Update(keyRune('b'))
 	if !strings.Contains(m.View(), "blame boom") {
 		t.Errorf("expected 'blame boom' in view:\n%s", m.View())
 	}
