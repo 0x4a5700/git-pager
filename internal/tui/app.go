@@ -32,12 +32,13 @@ var prodFactory sourceFactory = func(repoDir, relPath string) (pager.Source, err
 // that satisfies tea.Model; picker.Model and pager.Model are
 // sub-models with concrete Update return types.
 type Model struct {
-	repoDir string
-	mode    mode
-	picker  picker.Model
-	pager   pager.Model
-	err     error
-	factory sourceFactory
+	repoDir  string
+	mode     mode
+	picker   picker.Model
+	pager    pager.Model
+	err      error
+	factory  sourceFactory
+	lastSize tea.WindowSizeMsg
 }
 
 // NewModel builds the root model wired to the real git.NewSource.
@@ -73,6 +74,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Always forward window size to both sub-models so the pager has
+	// the correct height even when it is created after the initial event.
+	if sz, ok := msg.(tea.WindowSizeMsg); ok {
+		m.lastSize = sz
+		m.picker, _ = m.picker.Update(sz)
+		m.pager, _ = m.pager.Update(sz)
+		return m, nil
+	}
+
 	// Intercept picker selections: build a pager and flip modes.
 	if sel, ok := msg.(picker.SelectedMsg); ok {
 		src, err := m.factory(m.repoDir, sel.Path)
@@ -81,6 +91,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.pager = pager.NewModel(sel.Path, src)
+		m.pager, _ = m.pager.Update(m.lastSize)
 		m.mode = modePager
 		return m, nil
 	}

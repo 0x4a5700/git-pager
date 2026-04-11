@@ -82,6 +82,7 @@ func TestRoot_SelectedMsgTransitionsToPager(t *testing.T) {
 	if got.mode != modePager {
 		t.Errorf("mode = %d, want pager", got.mode)
 	}
+	got = asModel(t, mustNext(got.Update(tea.WindowSizeMsg{Width: 200, Height: 40})))
 	view := got.View()
 	if !strings.Contains(view, "content of a.txt") {
 		t.Errorf("view missing content:\n%s", view)
@@ -127,6 +128,7 @@ func TestRoot_ForwardsKeysToPager(t *testing.T) {
 	}
 	m := newModel("/repo", stockFiles, f)
 	m = asModel(t, mustNext(m.Update(picker.SelectedMsg{Path: "a.txt"})))
+	m = asModel(t, mustNext(m.Update(tea.WindowSizeMsg{Width: 200, Height: 40})))
 	m = asModel(t, mustNext(m.Update(keyType(tea.KeyLeft))))
 	if !strings.Contains(m.View(), "old-body") {
 		t.Errorf("pager did not step back:\n%s", m.View())

@@ -44,6 +44,12 @@ func keyRune(r rune) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
 }
 
+// withSize sends a WindowSizeMsg so View() renders content.
+func withSize(m Model) Model {
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 200, Height: 40})
+	return m
+}
+
 func TestNewModel_StartsAtNewest(t *testing.T) {
 	m := NewModel("a.txt", newFake())
 	if m.idx != 0 {
@@ -142,7 +148,7 @@ func TestQuitKey_CtrlC(t *testing.T) {
 }
 
 func TestView_ContainsStatusFields(t *testing.T) {
-	m := NewModel("sub/a.txt", newFake())
+	m := withSize(NewModel("sub/a.txt", newFake()))
 	view := m.View()
 	for _, want := range []string{"body-newest", "sub/a.txt", "hhhhhhh", "1/3", "current", "newest-msg"} {
 		if !strings.Contains(view, want) {
@@ -152,7 +158,7 @@ func TestView_ContainsStatusFields(t *testing.T) {
 }
 
 func TestView_PositionUpdatesAsWeWalkBack(t *testing.T) {
-	m := NewModel("a.txt", newFake())
+	m := withSize(NewModel("a.txt", newFake()))
 	m, _ = m.Update(keyType(tea.KeyLeft))
 	view := m.View()
 	for _, want := range []string{"body-middle", "ggggggg", "2/3", "1 back", "middle-msg"} {
