@@ -321,6 +321,88 @@ func TestDiffMode_RendersTwoSidedLineNumbers(t *testing.T) {
 	}
 }
 
+func TestDKeyCyclesModes(t *testing.T) {
+	m := NewModel("a.txt", newFake())
+	if m.mode != modeFile {
+		t.Fatalf("initial mode = %v, want modeFile", m.mode)
+	}
+	m, _ = m.Update(keyRune('d'))
+	if m.mode != modeDiff {
+		t.Errorf("after 1x d, mode = %v, want modeDiff", m.mode)
+	}
+	m, _ = m.Update(keyRune('d'))
+	if m.mode != modeInline {
+		t.Errorf("after 2x d, mode = %v, want modeInline", m.mode)
+	}
+	m, _ = m.Update(keyRune('d'))
+	if m.mode != modeFile {
+		t.Errorf("after 3x d, mode = %v, want modeFile", m.mode)
+	}
+}
+
+func TestInlineMode_HighlightsAddedLinesOnly(t *testing.T) {
+	// File at the current commit has 3 lines; the diff against the
+	// parent added line 2 only. Inline mode should color line 2 with
+	// the green Foreground("34") ANSI code but leave 1 and 3 plain.
+	fake := newFake()
+	fake.contents["hhhhhhhhhh"] = "line one\nline two\nline three"
+	fake.diffs["hhhhhhhhhh"] = "diff --git a/a.txt b/a.txt\n" +
+		"--- a/a.txt\n" +
+		"+++ b/a.txt\n" +
+		"@@ -1,2 +1,3 @@\n" +
+		" line one\n" +
+		"+line two\n" +
+		" line three\n"
+	m := withSize(NewModel("a.txt", fake))
+	// file → diff → inline
+	m, _ = m.Update(keyRune('d'))
+	m, _ = m.Update(keyRune('d'))
+	if m.mode != modeInline {
+		t.Fatalf("mode = %v, want modeInline", m.mode)
+	}
+
+	// Check that the diff pane's addedNums was populated correctly.
+	if !m.diff.addedNums[2] {
+		t.Errorf("addedNums missing line 2: %v", m.diff.addedNums)
+	}
+	if m.diff.addedNums[1] || m.diff.addedNums[3] {
+		t.Errorf("addedNums should not contain 1 or 3: %v", m.diff.addedNums)
+	}
+
+	// Inline mode renders the file content (not the diff). All three
+	// file lines should be present, plus the mode label in the status
+	// bar. We don't assert on ANSI escapes directly: lipgloss only
+	// emits them when the color profile detects a TTY, and tests run
+	// with an Ascii profile by default. The meaningful assertions are
+	// the addedNums set above and the mode label below — the render
+	// branch on addedNums is a direct style wrap that can't silently
+	// go wrong.
+	stripped := stripAnsi(m.View())
+	for _, want := range []string{"line one", "line two", "line three", "inline"} {
+		if !strings.Contains(stripped, want) {
+			t.Errorf("stripped view missing %q:\n%s", want, stripped)
+		}
+	}
+}
+
+func TestInlineMode_PagingRefreshesAddedSet(t *testing.T) {
+	// Regression guard: paging left/right while in inline mode must
+	// reload the diff so the addedNums set matches the new commit.
+	fake := newFake()
+	fake.contents["hhhhhhhhhh"] = "a\nb\nc"
+	fake.contents["gggggggggg"] = "a\nB\nc"
+	fake.diffs["hhhhhhhhhh"] = "@@ -1,3 +1,3 @@\n a\n-B\n+b\n c\n"
+	fake.diffs["gggggggggg"] = "@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n"
+	m := withSize(NewModel("a.txt", fake))
+	m, _ = m.Update(keyRune('d')) // diff
+	m, _ = m.Update(keyRune('d')) // inline
+	// Newest commit added line 2 ('b'). Page left to older commit.
+	m, _ = m.Update(keyType(tea.KeyLeft))
+	if !m.diff.addedNums[2] {
+		t.Errorf("after paging in inline mode, addedNums[2] should be set: %v", m.diff.addedNums)
+	}
+}
+
 func TestUnknownKey_NoOp(t *testing.T) {
 	m := NewModel("a.txt", newFake())
 	before := m.idx

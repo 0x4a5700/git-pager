@@ -43,29 +43,67 @@ type Source interface {
 // For the diff pane, oldNums/newNums are parallel to lines and hold
 // the old- and new-file line numbers for each diff row (0 means no
 // number applies — e.g. file/hunk headers, '+' has no old #, '-' has
-// no new #). They are nil for the file pane.
+// no new #). addedNums is the set of new-file line numbers that were
+// newly added by this commit; it is used by inline mode to highlight
+// those lines when rendering the file pane. All three are nil for
+// the file pane.
 type pane struct {
-	content string
-	lines   []string
-	oldNums []int
-	newNums []int
-	scrollY int
-	loaded  bool
-	err     error
+	content   string
+	lines     []string
+	oldNums   []int
+	newNums   []int
+	addedNums map[int]bool
+	scrollY   int
+	loaded    bool
+	err       error
+}
+
+// viewMode selects how the pager renders the current commit.
+type viewMode int
+
+const (
+	// modeFile shows the plain file content at the current commit.
+	modeFile viewMode = iota
+	// modeDiff shows the unified diff against the parent commit.
+	modeDiff
+	// modeInline shows the file content with lines added in this
+	// commit highlighted in green. Scroll state is shared with file
+	// mode so flipping between them doesn't jump around.
+	modeInline
+	numModes
+)
+
+func (v viewMode) label() string {
+	switch v {
+	case modeFile:
+		return "file"
+	case modeDiff:
+		return "diff"
+	case modeInline:
+		return "inline"
+	}
+	return "?"
+}
+
+// needsDiff reports whether the given mode requires the diff to be
+// loaded — either to render it directly or to know which lines are
+// newly added in the current commit.
+func (v viewMode) needsDiff() bool {
+	return v == modeDiff || v == modeInline
 }
 
 // Model pages through the history of a single file. idx == 0 is the
 // newest commit; it grows as the user walks backwards in time.
 type Model struct {
-	path     string
-	src      Source
-	idx      int
-	file     pane
-	diff     pane
-	showDiff bool
-	height   int
-	width    int
-	err      error
+	path   string
+	src    Source
+	idx    int
+	file   pane
+	diff   pane
+	mode   viewMode
+	height int
+	width  int
+	err    error
 }
 
 func NewModel(path string, src Source) Model {
@@ -98,10 +136,11 @@ func (m *Model) load() {
 	}
 	m.diff = pane{}
 	m.err = nil
-	// If we're currently viewing diff mode, refetch the diff for the
-	// new commit now — otherwise View() would render an empty pane
-	// and divide by zero on the scroll percentage.
-	if m.showDiff {
+	// If the current mode needs diff data (diff or inline), refetch
+	// it now — otherwise diff mode would render an empty pane and
+	// divide by zero on the scroll percentage, and inline mode would
+	// be missing its highlight set.
+	if m.mode.needsDiff() {
 		m.loadDiff()
 	}
 }
@@ -119,18 +158,26 @@ func (m *Model) loadDiff() {
 	}
 	lines := strings.Split(diff, "\n")
 	oldNums, newNums := diffLineNumbers(lines)
+	added := make(map[int]bool)
+	for i, line := range lines {
+		if newNums[i] > 0 && strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+			added[newNums[i]] = true
+		}
+	}
 	m.diff = pane{
-		content: diff,
-		lines:   lines,
-		oldNums: oldNums,
-		newNums: newNums,
-		loaded:  true,
+		content:   diff,
+		lines:     lines,
+		oldNums:   oldNums,
+		newNums:   newNums,
+		addedNums: added,
+		loaded:    true,
 	}
 }
 
-// active returns the pane currently being displayed.
+// active returns the pane currently being displayed. Inline mode
+// reuses the file pane so its scroll state is shared.
 func (m *Model) active() *pane {
-	if m.showDiff {
+	if m.mode == modeDiff {
 		return &m.diff
 	}
 	return &m.file
@@ -197,8 +244,8 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				m.load()
 			}
 		case "d":
-			m.showDiff = !m.showDiff
-			if m.showDiff {
+			m.mode = (m.mode + 1) % numModes
+			if m.mode.needsDiff() {
 				m.loadDiff()
 			}
 		case "down", "j":
@@ -364,15 +411,15 @@ func (m Model) View() string {
 	lineStyle := lipgloss.NewStyle().Width(padWidth).MaxWidth(padWidth)
 
 	// Gutter layout depends on mode.
-	//   file mode: one column of 1-based line numbers
-	//   diff mode: two columns (old | new file line numbers), blank
-	//              on the side that does not apply to a given row
+	//   file/inline mode: one column of 1-based line numbers
+	//   diff mode:        two columns (old | new file line numbers),
+	//                     blank on the side that does not apply
 	// Each column is sized to its widest number; a single space
 	// separates columns and trails the gutter.
 	var (
 		fileDigits, oldDigits, newDigits, gutterWidth int
 	)
-	if m.showDiff {
+	if m.mode == modeDiff {
 		maxOld, maxNew := 0, 0
 		for _, n := range p.oldNums {
 			if n > maxOld {
@@ -398,19 +445,18 @@ func (m Model) View() string {
 		contentWidth = 1
 	}
 	contentStyle := lipgloss.NewStyle().Width(contentWidth).MaxWidth(contentWidth)
+	// Inline mode highlights added lines with the same green used
+	// for '+' lines in diff mode.
+	inlineAddStyle := contentStyle.Foreground(lipgloss.Color("34"))
 
-	mode := "file"
-	if m.showDiff {
-		mode = "diff"
-	}
 	status := fmt.Sprintf("%s  •  %s  •  [%d/%d %s]  %s  %s  %s",
-		m.path, c.ShortHash, m.idx+1, len(commits), position, c.Subject, mode, scrollInfo)
-	hint := "(esc: back, ←/→: older/newer, d: diff/file, j/k: scroll, g/G: top/bottom)"
+		m.path, c.ShortHash, m.idx+1, len(commits), position, c.Subject, m.mode.label(), scrollInfo)
+	hint := "(esc: back, ←/→: older/newer, d: file/diff/inline, j/k: scroll, g/G: top/bottom)"
 
 	paddedLines := make([]string, len(visibleLines))
 	for i, l := range visibleLines {
 		idx := p.scrollY + i
-		if m.showDiff {
+		if m.mode == modeDiff {
 			var gutter string
 			if gutterWidth > 0 {
 				gutter = lineNumStyle.Render(
@@ -425,6 +471,10 @@ func (m Model) View() string {
 		}
 		lineNum := idx + 1
 		gutter := lineNumStyle.Render(fmt.Sprintf("%*d ", fileDigits, lineNum))
+		if m.mode == modeInline && m.diff.addedNums[lineNum] {
+			paddedLines[i] = gutter + inlineAddStyle.Render(l)
+			continue
+		}
 		paddedLines[i] = gutter + contentStyle.Render(l)
 	}
 
