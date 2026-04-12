@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  release:
+    name: Build and Release
+    if: |
+      github.event.pull_request.merged == true &&
+      (
+        contains(github.event.pull_request.labels.*.name, 'bump_patch') ||
+        contains(github.event.pull_request.labels.*.name, 'bump_minor') ||
+        contains(github.event.pull_request.labels.*.name, 'bump_major')
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Determine next version
+        id: version
+        run: |
+          latest=$(git tag --list 'v*' --sort=-version:refname | head -1)
+          if [ -z "$latest" ]; then
+            latest="v0.0.0"
+          fi
+          version="${latest#v}"
+          major=$(echo "$version" | cut -d. -f1)
+          minor=$(echo "$version" | cut -d. -f2)
+          patch=$(echo "$version" | cut -d. -f3)
+
+          labels='${{ toJson(github.event.pull_request.labels.*.name) }}'
+          if echo "$labels" | grep -q 'bump_major'; then
+            major=$((major + 1)); minor=0; patch=0
+          elif echo "$labels" | grep -q 'bump_minor'; then
+            minor=$((minor + 1)); patch=0
+          else
+            patch=$((patch + 1))
+          fi
+
+          echo "tag=v${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
+
+      - name: Build binaries
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          targets=(
+            "linux/amd64"
+            "linux/arm64"
+            "darwin/arm64"
+            "windows/amd64"
+          )
+          for target in "${targets[@]}"; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            ext=""
+            [ "$os" = "windows" ] && ext=".exe"
+            output="git-pager-${os}-${arch}${ext}"
+            GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags="-s -w -X main.version=${TAG}" \
+              -o "$output" ./cmd/git-pager
+          done
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            git-pager-linux-amd64 \
+            git-pager-linux-arm64 \
+            git-pager-darwin-arm64 \
+            git-pager-windows-amd64.exe
