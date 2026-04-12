@@ -5,10 +5,14 @@ A terminal UI for browsing the git history of files in a repository. Built with 
 ## Usage
 
 ```
-git-pager [repo-dir]
+git-pager [--version] [repo-dir]
 ```
 
 Run from anywhere inside a git repository, or pass a path to a repo. Defaults to the current directory.
+
+| Flag | Description |
+|------|-------------|
+| `--version` | Print the version and exit |
 
 ## Navigation
 
