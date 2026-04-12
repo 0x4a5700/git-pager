@@ -4,10 +4,13 @@ import (
 	"bufio"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
+
+var fortyHexRegex = regexp.MustCompile("^[0-9a-f]{40}$")
 
 // BlameLine is one entry from `git blame --line-porcelain`: the
 // commit, author, and time that last touched a given line of the
@@ -105,11 +108,9 @@ func parseBlameHashLine(line string) (string, bool) {
 		return "", false
 	}
 	hash := line[:40]
-	for i := range 40 {
-		c := hash[i]
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
-			return "", false
-		}
+
+	if !fortyHexRegex.MatchString(hash) {
+		return "", false
 	}
 	return hash, true
 }

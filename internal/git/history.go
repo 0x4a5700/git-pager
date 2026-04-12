@@ -121,7 +121,10 @@ func History(repoDir, relPath string) ([]Commit, error) {
 
 // FileAt returns the contents of relPath at the given commit.
 func FileAt(repoDir, hash, relPath string) (string, error) {
-	cmd := exec.Command("git", "-C", repoDir, "show", hash+":"+relPath)
+	// nosec explanation: relPath is the result of a filepath.Rel call
+	// and we are not invoking a shell here, so the risk is essentially
+	// nonexistent.
+	cmd := exec.Command("git", "-C", repoDir, "show", hash+":"+relPath) // #nosec G204
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("git show %s:%s: %w", hash, relPath, err)
