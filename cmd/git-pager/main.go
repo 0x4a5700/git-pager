@@ -10,14 +10,20 @@ import (
 	"github.com/0x4a5700/git-pager/internal/tui"
 )
 
+var version = "dev"
+
 func main() {
 	start := "."
 	switch len(os.Args) {
 	case 1:
 	case 2:
+		if os.Args[1] == "--version" {
+			fmt.Println(version)
+			return
+		}
 		start = os.Args[1]
 	default:
-		fmt.Fprintln(os.Stderr, "usage: git-pager [repo-dir]")
+		fmt.Fprintln(os.Stderr, "usage: git-pager [--version] [repo-dir]")
 		os.Exit(2)
 	}
 

@@ -36,8 +36,7 @@ func (s *Source) Blame(hash string) ([]BlameLine, error) {
 // header block for every line, trading a bit of output size for a
 // dramatically simpler parser.
 func BlameAt(repoDir, hash, relPath string) ([]BlameLine, error) {
-	cmd := exec.Command("git", "-C", repoDir, "blame",
-		"--line-porcelain", hash, "--", relPath)
+	cmd := exec.Command("git", "-C", repoDir, "blame", "--line-porcelain", hash, "--", relPath) // #nosec G204 -- relPath is the result of a filepath.Rel call and we are not invoking a shell, so the risk is essentially nonexistent.
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git blame %s -- %s: %w", hash, relPath, err)
