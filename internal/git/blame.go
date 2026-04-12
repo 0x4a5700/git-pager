@@ -28,7 +28,7 @@ type BlameLine struct {
 // commit. The returned slice is parallel to the file's lines at that
 // revision (one entry per line, in order).
 func (s *Source) Blame(hash string) ([]BlameLine, error) {
-	return BlameAt(s.repoDir, hash, s.relPath)
+	return BlameAt(s.repoDir, hash, s.pathFor(hash))
 }
 
 // BlameAt shells out to `git blame --line-porcelain` and parses the
