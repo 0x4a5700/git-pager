@@ -12,6 +12,9 @@ type Commit struct {
 	Hash      string
 	ShortHash string
 	Subject   string
+	// Path is the repo-relative path the file had at this commit. It
+	// differs from the current path when the file has been renamed.
+	Path string
 }
 
 // Source is a file's git history plus a way to fetch that file's
@@ -61,16 +64,29 @@ func (s *Source) Commits() []Commit { return s.commits }
 // DisplayPath is the repo-relative path suitable for the status bar.
 func (s *Source) DisplayPath() string { return s.relPath }
 
+// pathFor returns the repo-relative path the file had at the given
+// commit hash. When the file has been renamed, older commits carry the
+// old name; if the hash is not found the current path is returned as a
+// safe fallback.
+func (s *Source) pathFor(hash string) string {
+	for _, c := range s.commits {
+		if c.Hash == hash {
+			return c.Path
+		}
+	}
+	return s.relPath
+}
+
 // Content returns the file's contents at the given commit hash.
 func (s *Source) Content(hash string) (string, error) {
-	return FileAt(s.repoDir, hash, s.relPath)
+	return FileAt(s.repoDir, hash, s.pathFor(hash))
 }
 
 // Diff returns the unified diff of the file introduced by the given
 // commit (i.e. parent-vs-commit for this path). Root commits show the
 // file as fully added.
 func (s *Source) Diff(hash string) (string, error) {
-	return DiffAt(s.repoDir, hash, s.relPath)
+	return DiffAt(s.repoDir, hash, s.pathFor(hash))
 }
 
 func revParseToplevel(dir string) (string, error) {
@@ -87,33 +103,69 @@ func revParseToplevel(dir string) (string, error) {
 }
 
 // History returns commits that touched relPath within repoDir, newest
-// first. Deletions are filtered out so every returned commit is one
-// where `git show HASH:relPath` will succeed.
+// first, following renames. Deletions are filtered out so every
+// returned commit is one where `git show HASH:relPath` will succeed.
+// Each Commit.Path records the repo-relative path the file had at that
+// commit, which may differ from relPath when the file was renamed.
 func History(repoDir, relPath string) ([]Commit, error) {
-	cmd := exec.Command("git", "-C", repoDir, "log", "--diff-filter=AMCR", "--format=%H%x09%h%x09%s", "--", relPath) // #nosec G204 -- relPath is the result of a filepath.Rel call and we are not invoking a shell, so the risk is essentially nonexistent.
+	// %x00 acts as a record separator between commits so we can cleanly
+	// split the commit-info line from the --name-status lines that follow.
+	cmd := exec.Command("git", "-C", repoDir, "log", "--follow", // #nosec G204 -- relPath is the result of a filepath.Rel call and we are not invoking a shell, so the risk is essentially nonexistent.
+		"--diff-filter=AMCR", "--format=%x00%H%x09%h%x09%s", "--name-status", "--", relPath)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git log %s: %w", relPath, err)
 	}
 	var commits []Commit
-	for line := range strings.SplitSeq(strings.TrimRight(string(out), "\n"), "\n") {
-		if line == "" {
+	for record := range strings.SplitSeq(string(out), "\x00") {
+		record = strings.TrimLeft(record, "\n")
+		if record == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 3)
+		header, rest, _ := strings.Cut(record, "\n")
+		parts := strings.SplitN(header, "\t", 3)
 		if len(parts) != 3 {
 			continue
 		}
-		commits = append(commits, Commit{
+		c := Commit{
 			Hash:      parts[0],
 			ShortHash: parts[1],
 			Subject:   parts[2],
-		})
+			Path:      parseNameStatusPath(rest),
+		}
+		if c.Path == "" {
+			c.Path = relPath
+		}
+		commits = append(commits, c)
 	}
 	if len(commits) == 0 {
 		return nil, fmt.Errorf("no history for %s", relPath)
 	}
 	return commits, nil
+}
+
+// parseNameStatusPath extracts the file path from the --name-status
+// block that follows a commit in git log output. For plain adds and
+// modifications ("A\tpath", "M\tpath") it returns the single path; for
+// renames and copies ("R090\told\tnew", "C090\told\tnew") it returns
+// the new (destination) path, which is what exists in that commit's
+// tree.
+func parseNameStatusPath(s string) string {
+	for line := range strings.SplitSeq(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		status := fields[0]
+		if (strings.HasPrefix(status, "R") || strings.HasPrefix(status, "C")) && len(fields) >= 3 {
+			return fields[2]
+		}
+		if len(fields) >= 2 {
+			return fields[1]
+		}
+	}
+	return ""
 }
 
 // FileAt returns the contents of relPath at the given commit.

@@ -93,6 +93,55 @@ func TestHistory_IgnoresUnrelatedCommits(t *testing.T) {
 	}
 }
 
+func TestHistory_FollowsRenames(t *testing.T) {
+	dir := initRepo(t)
+	commit(t, dir, "old.txt", "v1", "create old")
+	commit(t, dir, "old.txt", "v2", "update old")
+	// Rename old.txt -> new.txt
+	gitRun(t, dir, "mv", "old.txt", "new.txt")
+	gitRun(t, dir, "commit", "-q", "-m", "rename to new")
+	commit(t, dir, "new.txt", "v3", "update new")
+
+	commits, err := History(dir, "new.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(commits) != 4 {
+		t.Fatalf("len(commits) = %d, want 4 (should follow rename into old.txt history)", len(commits))
+	}
+	if got, want := commits[0].Subject, "update new"; got != want {
+		t.Errorf("commits[0].Subject = %q, want %q", got, want)
+	}
+	if got, want := commits[3].Subject, "create old"; got != want {
+		t.Errorf("commits[3].Subject = %q, want %q", got, want)
+	}
+
+	// Commits after the rename reference new.txt; commits before reference old.txt.
+	if got, want := commits[0].Path, "new.txt"; got != want {
+		t.Errorf("commits[0].Path = %q, want %q", got, want)
+	}
+	if got, want := commits[3].Path, "old.txt"; got != want {
+		t.Errorf("commits[3].Path = %q, want %q", got, want)
+	}
+
+	// Content must be fetchable for all commits, including pre-rename ones.
+	src, err := NewSource(filepath.Join(dir, "new.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srcCommits := src.Commits()
+	if len(srcCommits) != 4 {
+		t.Fatalf("source commits = %d, want 4", len(srcCommits))
+	}
+	content, err := src.Content(srcCommits[3].Hash)
+	if err != nil {
+		t.Fatalf("Content for pre-rename commit: %v", err)
+	}
+	if content != "v1" {
+		t.Errorf("pre-rename content = %q, want %q", content, "v1")
+	}
+}
+
 func TestHistory_MissingFile(t *testing.T) {
 	dir := initRepo(t)
 	commit(t, dir, "a.txt", "v1", "only a")
