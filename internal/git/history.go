@@ -74,7 +74,7 @@ func (s *Source) Diff(hash string) (string, error) {
 }
 
 func revParseToplevel(dir string) (string, error) {
-	cmd := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel")
+	cmd := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel") // #nosec G204 -- dir is user input but we're not invoking a shell, so the risk is essentially nonexistent.
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("not a git repository: %s", dir)
@@ -90,10 +90,7 @@ func revParseToplevel(dir string) (string, error) {
 // first. Deletions are filtered out so every returned commit is one
 // where `git show HASH:relPath` will succeed.
 func History(repoDir, relPath string) ([]Commit, error) {
-	cmd := exec.Command("git", "-C", repoDir, "log",
-		"--diff-filter=AMCR",
-		"--format=%H%x09%h%x09%s",
-		"--", relPath)
+	cmd := exec.Command("git", "-C", repoDir, "log", "--diff-filter=AMCR", "--format=%H%x09%h%x09%s", "--", relPath) // #nosec G204 -- relPath is the result of a filepath.Rel call and we are not invoking a shell, so the risk is essentially nonexistent.
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git log %s: %w", relPath, err)
@@ -136,8 +133,7 @@ func FileAt(repoDir, hash, relPath string) (string, error) {
 // commit. An empty format string suppresses the commit header so the
 // output is just the diff body.
 func DiffAt(repoDir, hash, relPath string) (string, error) {
-	cmd := exec.Command("git", "-C", repoDir, "show",
-		"--format=", "--no-color", hash, "--", relPath)
+	cmd := exec.Command("git", "-C", repoDir, "show", "--format=", "--no-color", hash, "--", relPath) // #nosec G204 -- relPath is the result of a filepath.Rel call and we are not invoking a shell, so the risk is essentially nonexistent.
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("git show --format= %s -- %s: %w", hash, relPath, err)
@@ -151,7 +147,7 @@ func DiffAt(repoDir, hash, relPath string) (string, error) {
 // output of `git ls-files`, which is already sorted and excludes
 // anything ignored or untracked.
 func List(repoDir string) ([]string, error) {
-	cmd := exec.Command("git", "-C", repoDir, "ls-files")
+	cmd := exec.Command("git", "-C", repoDir, "ls-files") // #nosec G204 -- repoDir is user input but we're not invoking a shell, so the risk is essentially nonexistent.
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git ls-files: %w", err)
