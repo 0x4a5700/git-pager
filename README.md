@@ -1,3 +1,4 @@
+[![Release](https://github.com/0x4a5700/git-pager/actions/workflows/release.yml/badge.svg)](https://github.com/0x4a5700/git-pager/actions/workflows/release.yml) [![Known Vulnerabilities](https://snyk.io/test/github/0x4a5700/git-pager/badge.svg)](https://snyk.io/test/github/0x4a5700/git-pager)
 # git-pager
 
 A terminal UI for browsing the git history of files in a repository. Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea).
