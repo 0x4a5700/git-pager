@@ -48,7 +48,7 @@ Run from anywhere inside a git repository, or pass a path to a repo. Defaults to
 
 ## Building
 
-Requires Go 1.25+.
+Requires Go 1.27+.
 
 ```
 go build ./cmd/git-pager
@@ -59,3 +59,16 @@ go build ./cmd/git-pager
 ```
 go test ./...
 ```
+
+## Releasing
+
+Releases are fully automated with [semantic-release](https://semantic-release.gitbook.io/). Every push to `main` runs the tests, works out the next version from the commit messages since the last tag, builds the binaries, tags the release and publishes it on GitHub with generated notes.
+
+PRs are squash-merged, so the **PR title** must follow [Conventional Commits](https://www.conventionalcommits.org/) (enforced by the PR Title check):
+
+| Title | Release |
+|-------|---------|
+| `fix: ...` / `perf: ...` | Patch |
+| `feat: ...` | Minor |
+| `feat!: ...` or a `BREAKING CHANGE:` footer | Major |
+| `chore:`, `docs:`, `ci:`, `refactor:`, `test:`, ... | No release |
